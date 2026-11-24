@@ -17,14 +17,17 @@ namespace huxerui::css {
 /// The last declaration for a property within the list wins. View::With() applies modifiers left to right,
 /// so a later HuxerUI modifier can override the same property.
 ///
-/// Supported declarations are width, height, their min/max variants, padding, gap, background-color, color,
-/// font-size, border, and border-radius. A length is a non-negative number in `px` or a unitless zero.
-/// One `px` corresponds to one HuxerUI logical unit. The size declarations use Frame's outer dimensions,
-/// including padding. The gap declaration sets Row or Column spacing. Font size must be positive.
+/// Lengths are in `px` or unitless zero. One `px` corresponds to one HuxerUI logical unit. Width, height,
+/// and their min/max variants use Frame's outer dimensions. Padding and border-radius accept one to four lengths.
+/// Gap, justify-content, and align-items apply to the existing layout, such as Row or Column. Cursor follows the
+/// HuxerUI pointer hit route on hosts with cursor support.
 ///
-/// Padding accepts one to four lengths in CSS shorthand order. Border accepts `<length> solid <color>`,
-/// with the border painted inside the bounds. Border radius accepts one radius for all corners.
-/// Colors accept `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, `black`, `white`, and `transparent`.
+/// Background accepts a solid color or a single axis-aligned linear-gradient(). Background and background-color
+/// replace the same fill. Border accepts `<length> solid <color>` or `none` and paints inside the bounds.
+/// Box-shadow accepts a single outer shadow with an explicit color, or `none`.
+///
+/// Colors accept hexadecimal forms, black, white, transparent, and numeric rgb(), rgba(), hsl(), and hsla()
+/// functions. Font size takes a positive length.
 ///
 /// @code{.cpp}
 /// return Text("Save").With(

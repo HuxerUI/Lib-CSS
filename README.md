@@ -40,8 +40,9 @@ using huxerui::css::Css;
 View SaveLabel() {
   return Text("Save").With(Css(R"(
     padding: 8px 16px;
-    background-color: #2563eb;
-    border-radius: 8px;
+    background: linear-gradient(to right, hsl(224 72% 41%), rgb(29 78 216));
+    border-radius: 6px 12px;
+    box-shadow: 0 3px 8px rgb(0 0 0 / 20%);
     color: white;
   )"));
 }
@@ -65,21 +66,34 @@ A `Css` value parses and owns its declarations on construction. Reuse the value 
 | --- | --- |
 | `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height` | Lengths for HuxerUI's outer `Frame` |
 | `padding` | One to four lengths in CSS shorthand order |
-| `gap` | A single length for `Row` or `Column` spacing |
+| `gap` | A single length for the existing layout's spacing |
+| `justify-content` | `start`, `end`, `flex-start`, `flex-end`, `center`, `space-between`, `space-around`, or `space-evenly` |
+| `align-items` | `start`, `end`, `flex-start`, `flex-end`, `center`, or `stretch` |
+| `background` | A solid color or one `linear-gradient()` |
 | `background-color`, `color` | A solid background color or text foreground color |
 | `font-size` | A positive length |
-| `border` | A uniform border in the form `<length> solid <color>` |
-| `border-radius` | A single length for all four corners |
+| `border` | `<length> solid <color>` or `none` |
+| `border-radius` | One to four lengths in CSS corner shorthand order |
+| `box-shadow` | One outer shadow with two offsets, optional blur and spread, and an explicit color, or `none` |
+| `cursor` | `default`, `pointer`, `text`, `crosshair`, `move`, `grab`, `grabbing`, `ew-resize`, `ns-resize`, `nesw-resize`, `nwse-resize`, `not-allowed`, or `wait` |
 
-Lengths use non-negative `px` values or a unitless zero. One `px` is one HuxerUI logical unit. A declaration of `width: 120px; padding: 10px` requests an outer width of 120 and leaves 100 logical units for content when the parent grants that width. Borders paint inside the view bounds.
+One `px` is one HuxerUI logical unit. Lengths require `px` or unitless zero. The size, spacing, padding, border and corner lengths are non-negative. For example, `width: 120px; padding: 10px` requests an outer width of 120 and leaves 100 logical units for content when the parent grants that width. Borders paint inside the bounds. Alignment applies to the main or cross axis of the existing layout. Cursor shapes follow the HuxerUI hit route and are mapped by the host.
 
-Colors accept `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, `black`, `white`, and `transparent`.
+### Colors and fills
+
+Use `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, `black`, `white`, or `transparent`. The numeric `rgb()`, `rgba()`, `hsl()`, and `hsla()` forms accept space-separated channels with optional slash alpha or comma-separated channels with optional comma alpha. For example, `rgb(37 99 235 / 60%)` and `hsla(220, 80%, 50%, 0.6)` both supply translucent colors. RGB channels accept numbers or percentages. HSL saturation and lightness use percentages.
+
+`linear-gradient()` accepts `to top`, `to right`, `to bottom`, or `to left` and at least two color stops. The default direction is `to bottom`. Stops take an optional percentage from `0%` to `100%`, and omitted positions are distributed between the surrounding stops. Each view has one background fill. `background`, `background-color`, and HuxerUI's `Background` replace that fill in declaration order.
+
+### Shadows
+
+Provide the horizontal and vertical offset, followed by optional blur and spread. Put the color before or after the lengths. Offsets and spread may be negative, and blur must be non-negative. For example, `box-shadow: 0 4px 12px -2px rgb(0 0 0 / 25%)` uses HuxerUI's shadow blur falloff. Use `box-shadow: none` to clear a preceding shadow.
 
 Separate declarations with semicolons. CSS comments and an optional final semicolon are accepted. Malformed declarations and unsupported properties or values throw `std::invalid_argument` at construction. The diagnostic includes a zero-based byte offset.
 
 ## Preview and tests
 
-The [preview app](examples/preview) shows how CSS styles combine with native padding and background modifiers. Run it on macOS from the repository root.
+The [preview app](examples/preview) demonstrates gradients, shadows, container alignment, pointer cursors, and native modifier overrides. Run it on macOS from the repository root.
 
 ```sh
 cd examples/preview
@@ -94,7 +108,7 @@ cmake --build build/tests
 ctest --test-dir build/tests --output-on-failure
 ```
 
-The [test suite](tests/css.cpp) compares layout and paint output against equivalent HuxerUI modifiers and checks override order, shorthand values, and invalid inputs.
+The [test suite](tests/css.cpp) compares layout and paint output against equivalent HuxerUI modifiers and checks override order, cursor requests, shorthand values, and invalid inputs.
 
 ## License
 

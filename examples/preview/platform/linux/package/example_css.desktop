@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=CSS Preview
+Exec=example_css
+Icon=example_css
+Categories=Utility;
+Terminal=false

@@ -12,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -24,25 +25,60 @@ namespace {
 
 using Property = std::variant<
     Padding, Border, CornerRadius, Shadow, Background, Foreground, FontSize, Spacing, MainAlign, CrossAlign,
-    PointerCursor, Frame>;
+    PointerCursor>;
+
+struct BaseRule {
+  std::vector<Property> properties;
+  Frame frame;
+};
 
 } // namespace
 
 struct Css::Impl {
-  std::vector<Property> properties;
+  BaseRule base;
   Indication indication;
 };
 
+struct CssClass::Impl {
+  std::vector<std::string> names;
+};
+
 namespace {
+
+struct SheetSource {
+  std::string_view name;
+  std::string_view text;
+  std::string_view selector;
+};
 
 struct Token {
   std::string_view text;
   std::size_t offset = 0;
   std::string_view property{};
+  const SheetSource* source = nullptr;
+
+  Token Slice(std::size_t start, std::size_t length, std::string_view property_name) const {
+    return {text.substr(start, length), offset + start, property_name, source};
+  }
 };
 
 [[noreturn]] void Invalid(Token token, std::string_view reason) {
-  std::string message = "Lib-CSS at byte " + std::to_string(token.offset);
+  std::string message = "Lib-CSS ";
+  if (token.source) {
+    const auto before = token.source->text.substr(0, token.offset);
+    const auto line = std::ranges::count(before, '\n') + 1;
+    const auto line_break = before.find_last_of('\n');
+    const auto column = line_break == std::string_view::npos ? before.size() + 1 : before.size() - line_break;
+    message += token.source->name;
+    message += ":" + std::to_string(line) + ":" + std::to_string(column);
+    if (!token.source->selector.empty()) {
+      message += " in rule `";
+      message += token.source->selector;
+      message += '`';
+    }
+  } else {
+    message += "at byte " + std::to_string(token.offset);
+  }
   if (!token.property.empty()) {
     message += " in `";
     message += token.property;
@@ -68,6 +104,17 @@ char LowerAscii(char character) {
 
 bool MatchesKeyword(std::string_view text, std::string_view keyword) {
   return std::ranges::equal(text, keyword, {}, LowerAscii);
+}
+
+bool IsClassName(std::string_view name) {
+  const auto is_name_start = [](char character) {
+    const char lower = LowerAscii(character);
+    return (lower >= 'a' && lower <= 'z') || character == '_' || character == '-';
+  };
+  if (name.starts_with('-')) name.remove_prefix(1);
+  return !name.empty() && is_name_start(name.front()) && std::ranges::all_of(name.substr(1), [&](char character) {
+    return is_name_start(character) || (character >= '0' && character <= '9');
+  });
 }
 
 struct Declaration {
@@ -132,9 +179,9 @@ public:
       ++position_;
     }
     if (position_ == start) {
-      Invalid({input_.text.substr(start, 1), input_.offset + start, property}, "expected a token");
+      Invalid(input_.Slice(start, 1, property), "expected a token");
     }
-    const Token token{input_.text.substr(start, position_ - start), input_.offset + start, property};
+    const Token token = input_.Slice(start, position_ - start, property);
     if (depth != 0) Invalid(token, "unterminated function");
     return token;
   }
@@ -147,7 +194,7 @@ private:
   void ConsumeComment() {
     const std::size_t end = input_.text.find("*/", position_ + 2);
     if (end == std::string_view::npos) {
-      Invalid({"/*", input_.offset + position_, input_.property}, "unterminated comment");
+      Invalid(input_.Slice(position_, 2, input_.property), "unterminated comment");
     }
     position_ = end + 2;
   }
@@ -190,7 +237,7 @@ std::optional<FunctionValue> AsFunction(Token token) {
   if (open == std::string_view::npos || !token.text.ends_with(')')) return std::nullopt;
   return FunctionValue{
       token.text.substr(0, open),
-      {token.text.substr(open + 1, token.text.size() - open - 2), token.offset + open + 1, token.property},
+      token.Slice(open + 1, token.text.size() - open - 2, token.property),
   };
 }
 
@@ -519,73 +566,225 @@ void ApplyStateProperty(IndicationLayer& layer, const Declaration& declaration) 
   }
 }
 
-void ParseStateBlock(ValueReader& reader, Indication& indication) {
-  using StateField = std::optional<IndicationLayer> Indication::*;
-  constexpr std::pair<std::string_view, StateField> states[] = {
-      {"hover", &Indication::hover}, {"active", &Indication::press}, {"focus-visible", &Indication::focus},
-  };
+FrameField AddBaseProperty(const Declaration& declaration, BaseRule& rule) {
+  const auto dimension = std::ranges::find_if(dimensions, [&](const auto& entry) {
+    return MatchesKeyword(declaration.name.text, entry.first);
+  });
+  if (dimension == dimensions.end()) {
+    rule.properties.push_back(ParseProperty(declaration));
+    return nullptr;
+  }
+  const FrameField field = dimension->second;
+  rule.frame.*field = ParseLength(declaration.SingleValue());
+  return field;
+}
 
-  if (!reader.Consume(':')) Invalid(reader.Read(), "expected ':' after '&'");
-  const Token state = reader.Read();
-  auto& layer = indication.*ParseKeyword(state, states);
-  if (!reader.Consume('{')) Invalid(state, "expected '{' after the interaction state");
+using StateField = std::optional<IndicationLayer> Indication::*;
+
+constexpr std::pair<std::string_view, StateField> states[] = {
+    {"hover", &Indication::hover}, {"active", &Indication::press}, {"focus-visible", &Indication::focus},
+};
+
+template <class Apply> void ReadBlock(ValueReader& reader, Token selector, Apply apply) {
+  if (!reader.Consume('{')) Invalid(selector, "expected '{' after the selector");
   while (!reader.Consume('}')) {
-    if (reader.Empty()) Invalid(state, "unterminated interaction state block");
+    if (reader.Empty()) Invalid(selector, "unterminated CSS block");
     if (reader.Consume(';')) continue;
+    apply(ReadDeclaration(reader));
+  }
+}
+
+void ReadStateBlock(ValueReader& reader, Token selector, std::optional<IndicationLayer>& layer) {
+  ReadBlock(reader, selector, [&](const Declaration& declaration) {
     if (!layer) {
       layer.emplace(
           IndicationLayer{.placement = IndicationPlacement::BehindContent, .enter = SnapSpec{}, .exit = SnapSpec{}}
       );
     }
-    ApplyStateProperty(*layer, ReadDeclaration(reader));
+    ApplyStateProperty(*layer, declaration);
+  });
+}
+
+void ApplyProperties(ModifierContext& context, const std::vector<Property>& properties) {
+  for (const auto& property : properties) {
+    std::visit([&context](const auto& value) { context.Apply(value); }, property);
   }
 }
 
+void ApplyFrameAndIndication(ModifierContext& context, const Frame& frame, const Indication& indication) {
+  if (frame != Frame{}) {
+    context.Apply(frame);
+  }
+  if (indication.hover || indication.press || indication.focus) {
+    context.Apply(indication);
+  }
+}
+
+void MergeLayer(std::optional<IndicationLayer>& target, const std::optional<IndicationLayer>& source) {
+  if (!source) return;
+  if (!target) {
+    target = source;
+    return;
+  }
+  if (source->fill) target->fill = source->fill;
+  if (source->foreground) target->foreground = source->foreground;
+  if (source->border) target->border = source->border;
+  if (source->corner_radii) target->corner_radii = source->corner_radii;
+}
+
+struct StateRule {
+  StateField field;
+  std::optional<IndicationLayer> layer{};
+};
+
+using Rule = std::variant<BaseRule, StateRule>;
+
+class StyleSheet {
+public:
+  StyleSheet(std::string name, std::string_view text) : name_(std::move(name)) {
+    if (text.starts_with("\xef\xbb\xbf")) text.remove_prefix(3);
+    SheetSource source{name_, text, {}};
+    ValueReader reader(Token{.text = text, .source = &source});
+    for (;;) {
+      source.selector = {};
+      if (reader.Empty()) break;
+      const Token selector = reader.Read();
+      source.selector = selector.text;
+      if (!selector.text.starts_with('.') || !IsClassName(selector.text.substr(1))) {
+        Invalid(selector, "expected a class selector");
+      }
+
+      classes_[std::string(selector.text.substr(1))].push_back(rules_.size());
+      if (reader.Consume(':')) {
+        const Token state = reader.Read();
+        if (state.offset != selector.offset + selector.text.size() + 1) {
+          Invalid(state, "expected the state immediately after the class name");
+        }
+        source.selector = text.substr(selector.offset, state.offset + state.text.size() - selector.offset);
+        StateRule rule{ParseKeyword(state, states)};
+        ReadStateBlock(reader, state, rule.layer);
+        rules_.emplace_back(std::move(rule));
+      } else {
+        BaseRule rule;
+        ReadBlock(reader, selector, [&](const Declaration& declaration) {
+          AddBaseProperty(declaration, rule);
+        });
+        rules_.emplace_back(std::move(rule));
+      }
+    }
+  }
+
+  void Apply(ModifierContext& context, const std::vector<std::string>& names) const {
+    if (names.size() == 1) {
+      ApplyRules(context, FindRules(names.front()));
+      return;
+    }
+    std::vector<std::size_t> selected;
+    for (const auto& name : names) {
+      const auto& indices = FindRules(name);
+      selected.insert(selected.end(), indices.begin(), indices.end());
+    }
+    std::ranges::sort(selected);
+    ApplyRules(context, selected);
+  }
+
+private:
+  const std::vector<std::size_t>& FindRules(const std::string& name) const {
+    const auto found = classes_.find(name);
+    if (found == classes_.end()) {
+      throw std::invalid_argument("Lib-CSS unknown class `" + name + "` in " + name_);
+    }
+    return found->second;
+  }
+
+  void ApplyRules(ModifierContext& context, std::span<const std::size_t> selected) const {
+    Frame frame;
+    Indication indication;
+    for (const auto index : selected) {
+      const auto& rule = rules_[index];
+      if (const auto* state = std::get_if<StateRule>(&rule)) {
+        MergeLayer(indication.*state->field, state->layer);
+      } else {
+        const auto& base = std::get<BaseRule>(rule);
+        ApplyProperties(context, base.properties);
+        for (const auto& dimension : dimensions) {
+          const auto field = dimension.second;
+          if (base.frame.*field) frame.*field = base.frame.*field;
+        }
+      }
+    }
+    // The SDK validates frame dimensions on each Apply, so intermediate rule values must be merged first.
+    ApplyFrameAndIndication(context, frame, indication);
+  }
+
+  std::string name_;
+  std::unordered_map<std::string, std::vector<std::size_t>> classes_;
+  std::vector<Rule> rules_;
+};
+
 } // namespace
+
+ApplicationHook InstallStyleSheet(RawResource resource) {
+  return [resource = std::move(resource)](ApplicationContext& context) {
+    const auto asset = UseService<Resources>()->GetRawResource(resource);
+    context.Provide(std::make_shared<StyleSheet>(resource.ToString(), asset.ReadString()));
+  };
+}
 
 Css::Css(std::string_view declarations) {
   auto impl = std::make_shared<Impl>();
-  Frame frame;
   Token min_width;
   Token min_height;
   ValueReader reader(Token{declarations});
   while (!reader.Empty()) {
     if (reader.Consume(';')) continue;
     if (reader.Consume('&')) {
-      ParseStateBlock(reader, impl->indication);
+      if (!reader.Consume(':')) Invalid(reader.Read(), "expected ':' after '&'");
+      const Token state = reader.Read();
+      ReadStateBlock(reader, state, impl->indication.*ParseKeyword(state, states));
       continue;
     }
     const Declaration declaration = ReadDeclaration(reader);
-    const auto dimension = std::ranges::find_if(dimensions, [&](const auto& entry) {
-      return MatchesKeyword(declaration.name.text, entry.first);
-    });
-    if (dimension == dimensions.end()) {
-      impl->properties.push_back(ParseProperty(declaration));
-      continue;
-    }
-    const FrameField field = dimension->second;
-    frame.*field = ParseLength(declaration.SingleValue());
+    const FrameField field = AddBaseProperty(declaration, impl->base);
     if (field == &Frame::min_width) min_width = declaration.name;
     if (field == &Frame::min_height) min_height = declaration.name;
   }
-  if (frame != Frame{}) {
-    // Merge size declarations before applying the frame so only the final bounds are validated.
-    ValidateBounds(frame.min_width, frame.max_width, min_width);
-    ValidateBounds(frame.min_height, frame.max_height, min_height);
-    impl->properties.emplace_back(frame);
-  }
+  const auto& frame = impl->base.frame;
+  ValidateBounds(frame.min_width, frame.max_width, min_width);
+  ValidateBounds(frame.min_height, frame.max_height, min_height);
   impl_ = std::move(impl);
 }
 
 void Css::Configure(ModifierContext& context) const {
   if (!impl_) return;
-  for (const auto& property : impl_->properties) {
-    std::visit([&context](const auto& value) { context.Apply(value); }, property);
+  ApplyProperties(context, impl_->base.properties);
+  ApplyFrameAndIndication(context, impl_->base.frame, impl_->indication);
+}
+
+CssClass::CssClass(std::initializer_list<std::string_view> names) {
+  auto impl = std::make_shared<Impl>();
+  impl->names.reserve(names.size());
+  for (const auto name : names) {
+    if (!IsClassName(name)) {
+      throw std::invalid_argument("Lib-CSS invalid class name `" + std::string(name) + "`");
+    }
+    impl->names.emplace_back(name);
   }
-  const auto& indication = impl_->indication;
-  if (indication.hover || indication.press || indication.focus) {
-    context.Apply(indication);
+  std::ranges::sort(impl->names);
+  const auto duplicates = std::ranges::unique(impl->names);
+  impl->names.erase(duplicates.begin(), duplicates.end());
+  impl_ = std::move(impl);
+}
+
+void CssClass::Configure(ModifierContext& context) const {
+  if (!impl_) return;
+  std::shared_ptr<StyleSheet> sheet;
+  try {
+    sheet = UseService<StyleSheet>();
+  } catch (const std::logic_error&) {
+    throw std::logic_error("Lib-CSS CssClass requires InstallStyleSheet() in application_hooks");
   }
+  sheet->Apply(context, impl_->names);
 }
 
 } // namespace huxerui::css

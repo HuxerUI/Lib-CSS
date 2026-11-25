@@ -1,5 +1,7 @@
-#include <huxerui/huxerui.h>
 #include <huxerui/css.h>
+#include <huxerui/huxerui.h>
+
+#include <app_resources.h>
 
 #include <string_view>
 #include <utility>
@@ -8,6 +10,7 @@ namespace {
 
 using namespace huxerui;
 using huxerui::css::Css;
+using huxerui::css::CssClass;
 
 const Css sample_style(R"(
   padding: 6px 14px;
@@ -29,18 +32,6 @@ const Css alignment_style(R"(
   align-items: center;
   background-color: rgb(233 240 252);
   border-radius: 8px;
-)");
-
-const Css feedback_style(R"(
-  padding: 8px 16px;
-  background-color: #3730a3;
-  color: white;
-  border: 2px solid #3730a3;
-  border-radius: 8px;
-  cursor: pointer;
-  &:hover { background-color: #4f46e5 }
-  &:active { background-color: #27215e; border: 2px solid #27215e }
-  &:focus-visible { border: 2px solid #a5b4fc }
 )");
 
 View Sample(std::string_view title, std::string_view declaration, View content) {
@@ -68,8 +59,8 @@ View App() {
           Text("Preview").With(sample_style, Padding(18.0F))),
       Sample("Background override", ".With(sample_style, Background(...))",
           Text("Preview").With(sample_style, Background(Color::Rgb(4, 120, 87)))),
-      Sample("Interaction styles", "Hover, press, or focus with Tab",
-          Button("Try it").OnClick([] {}).With(feedback_style)),
+      Sample("Packaged styles", "Hover, press, or focus with Tab",
+          Button("Try it").OnClick([] {}).With(CssClass("button", "primary"))),
       Sample(
           "Container alignment",
           "justify-content: space-between; align-items: center",
@@ -86,5 +77,9 @@ View App() {
 
 const huxerui::Application application{
     App,
-    {.window = {.title = "CSS Preview"}, .show_debug_overlay = false},
+    {
+        .window = {.title = "CSS Preview"},
+        .show_debug_overlay = false,
+        .application_hooks = {huxerui::css::InstallStyleSheet(app::raw::styles_css)},
+    },
 };

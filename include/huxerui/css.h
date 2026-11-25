@@ -1,16 +1,29 @@
 #pragma once
 
 /// @file
-/// @brief Inline CSS declarations for HuxerUI views.
+/// @brief Inline and packaged CSS styles for HuxerUI views.
 ///
-/// Include `<huxerui/css.h>` and link `HuxerUI::CSS`. Pass a huxerui::css::Css value to View::With().
+/// Include `<huxerui/css.h>` and link `HuxerUI::CSS`. Pass a Css or CssClass value to View::With().
 
+#include <concepts>
+#include <initializer_list>
 #include <memory>
 #include <string_view>
+#include <utility>
 
+#include <huxerui/app.h>
 #include <huxerui/modifier.h>
+#include <huxerui/resource.h>
 
 namespace huxerui::css {
+
+/// @brief Creates an application hook that loads a packaged style sheet before the first window opens.
+/// @param resource Generated key for a CSS file under `resources/raw`.
+/// @return A hook to add to AppOptions::application_hooks.
+///
+/// Register one sheet per application. The hook reads and parses it once per Runtime and shares it across windows.
+/// The hook propagates resource errors and throws std::invalid_argument for invalid CSS.
+ApplicationHook InstallStyleSheet(RawResource resource);
 
 /// @brief A reusable declaration list that styles one View through View::With().
 ///
@@ -54,6 +67,32 @@ public:
   void Configure(ModifierContext& context) const;
 
 private:
+  struct Impl;
+  std::shared_ptr<const Impl> impl_;
+};
+
+/// @brief Applies one or more classes from the application's installed style sheet.
+///
+/// Pass case-sensitive class names without a leading dot, such as `CssClass("button", "primary")`.
+/// Matching rules apply in sheet order. Selected interaction rules produce one Indication for this modifier.
+class CssClass {
+public:
+  /// @brief Stores owned copies of the class names.
+  /// @throws std::invalid_argument If a name is empty or contains unsupported characters.
+  template <class... Names>
+    requires (std::convertible_to<Names, std::string_view> && ...)
+  explicit CssClass(std::string_view name, Names&&... names)
+      : CssClass({name, std::string_view(std::forward<Names>(names))...}) {}
+
+  /// @brief Applies the selected rules at this modifier's position in View::With().
+  /// @param context The SDK's modifier context for the current View.
+  /// @throws std::logic_error If no style sheet is installed.
+  /// @throws std::invalid_argument If the installed sheet has no rule for a requested class.
+  void Configure(ModifierContext& context) const;
+
+private:
+  explicit CssClass(std::initializer_list<std::string_view> names);
+
   struct Impl;
   std::shared_ptr<const Impl> impl_;
 };

@@ -1,0 +1,45 @@
+.base {
+  min-width: 100px;
+  padding: 2px;
+}
+
+.accent {
+  max-width: 90px;
+  padding: 5px;
+}
+
+.base {
+  max-width: 120px;
+  padding: 7px;
+}
+
+.single {
+  width: 80px;
+  padding: 5px;
+}
+
+.action {
+  background-color: black;
+  border: 1px solid white;
+  color: white;
+}
+
+.action:hover {
+  background-color: black;
+  color: #c1dfed;
+}
+
+.action:focus-visible {
+  border: 2px solid white;
+  border-radius: 2px 4px;
+}
+
+.primary:hover {
+  background-color: #2563eb;
+}
+
+.primary:active {
+  background: #059669;
+  color: black;
+  border: none;
+}

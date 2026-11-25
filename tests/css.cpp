@@ -2,7 +2,10 @@
 #include <huxerui/huxerui.h>
 #include <huxerui/testing/ui_test.h>
 
+#include <css_fixture_resources.h>
+
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -13,6 +16,8 @@ namespace {
 
 using namespace huxerui;
 using huxerui::css::Css;
+using huxerui::css::CssClass;
+using huxerui::css::InstallStyleSheet;
 using huxerui::testing::UiSelector;
 using huxerui::testing::UiTest;
 using huxerui::testing::UiTestOptions;
@@ -416,10 +421,9 @@ View NativeFeedback(View control) {
   ));
 }
 
-void CheckFeedback(RootFactory root, RootFactory reference) {
-  const Application css(root, {.show_debug_overlay = false});
+void CheckFeedback(const Application& css, RootFactory reference, UiTestOptions options = TestOptions()) {
   const Application native(reference, {.show_debug_overlay = false});
-  UiTest actual(css, TestOptions());
+  UiTest actual(css, options);
   UiTest expected(native, TestOptions());
   CheckSnapshot(actual, expected);
 
@@ -450,6 +454,91 @@ void CheckFeedback(RootFactory root, RootFactory reference) {
   check(send);
 }
 
+class StyleResources final : public PlatformResources {
+public:
+  ResourceConfiguration Configuration() const override { return {}; }
+
+  std::optional<InputStream> OpenRead(std::string_view path) override {
+    if (path == "huxerui/css_fixture/raw/styles.css") ++sheet_reads;
+    auto stream = File(std::string(LIB_CSS_FIXTURE_PACKAGE) + "/" + std::string(path)).OpenRead();
+    if (!stream.Succeeded()) return std::nullopt;
+    return std::move(stream).Value();
+  }
+
+  int sheet_reads = 0;
+};
+
+void CheckStyleSheet() {
+  const auto provider = std::make_shared<StyleResources>();
+  auto options = TestOptions();
+  options.resource_provider = provider;
+  const AppOptions style_options{
+      .show_debug_overlay = false,
+      .application_hooks = {InstallStyleSheet(css_fixture::raw::styles_css)},
+  };
+  const Application cascade([]() -> View {
+    return Column {
+      Bar().With(CssClass("base", "accent", "base")).Key("first"),
+      Bar().With(CssClass("accent", "base")).Key("second"),
+      Bar().With(CssClass("base", "accent"), Padding(11.0F)).Key("override"),
+      Bar().With(CssClass(std::string("single"))).Key("single"),
+    }.With(CrossAlign(CrossAxisAlignment::Start));
+  }, style_options);
+  UiTest actual(cascade, options);
+  const auto check = [&](std::string_view key, Size size, float padding) {
+    const auto bar = actual.Find(UiSelector::Key(key));
+    const auto bounds = bar.One().bounds;
+    const auto marker = bar.Find(UiSelector::Key("marker")).One().bounds;
+    Check(Size{bounds.width, bounds.height} == size, "Unexpected class frame");
+    Check(Point{marker.x - bounds.x, marker.y - bounds.y} == Point{padding, padding}, "Unexpected class padding");
+  };
+  check("first", {100.0F, 24.0F}, 7.0F);
+  check("second", {100.0F, 24.0F}, 7.0F);
+  check("override", {100.0F, 32.0F}, 11.0F);
+  check("single", {80.0F, 20.0F}, 5.0F);
+  actual.Pump();
+  Check(provider->sheet_reads == 1, "Style sheet should load once for each application");
+
+  const Application feedback([] {
+    return FeedbackPage(Button("Action").OnClick([] {}).With(CssClass("primary", "action")));
+  }, style_options);
+  CheckFeedback(feedback, [] { return NativeFeedback(Button("Action")); }, options);
+  Check(provider->sheet_reads == 2, "Independent applications should each load their style sheet");
+}
+
+template <class Error> void ExpectError(auto&& run, std::string_view diagnostic) {
+  try {
+    run();
+  } catch (const Error& error) {
+    const std::string_view message(error.what());
+    Check(message.find(diagnostic) != std::string_view::npos, message);
+    return;
+  }
+  throw std::runtime_error("Expected CSS error: " + std::string(diagnostic));
+}
+
+void CheckStyleSheetErrors() {
+  auto options = TestOptions();
+  options.resource_provider = std::make_shared<StyleResources>();
+  const auto root = [] { return Text("Class lookup").With(CssClass("unknown")); };
+  const Application missing(root, {.show_debug_overlay = false});
+  ExpectError<std::logic_error>([&] { const UiTest test(missing, options); }, "requires InstallStyleSheet()");
+
+  const Application unknown(root, {
+      .show_debug_overlay = false,
+      .application_hooks = {InstallStyleSheet(css_fixture::raw::styles_css)},
+  });
+  ExpectError<std::invalid_argument>([&] { const UiTest test(unknown, options); }, "unknown class `unknown`");
+
+  const Application invalid(root, {
+      .show_debug_overlay = false,
+      .application_hooks = {InstallStyleSheet(css_fixture::raw::invalid_css)},
+  });
+  ExpectError<std::invalid_argument>(
+      [&] { const UiTest test(invalid, options); }, "css_fixture:raw/invalid.css:2:10 in rule `.button:hover`");
+  ExpectError<std::invalid_argument>([] { const CssClass rejected(".button"); }, "invalid class name");
+}
+
 void ExpectInvalid(std::string_view declarations, std::string_view diagnostic) {
   try {
     const Css rejected(declarations);
@@ -476,8 +565,17 @@ int main() {
     CheckEquivalent(CssGradients, NativeGradients);
     CheckAlignment();
     CheckCursor();
-    CheckFeedback([] { return CssFeedback(Button("Action"), true); }, [] { return NativeFeedback(Button("Action")); });
-    CheckFeedback([] { return CssFeedback(Text("Action"), false); }, [] { return NativeFeedback(Text("Action")); });
+    const AppOptions plain{.show_debug_overlay = false};
+    CheckFeedback(
+        Application([] { return CssFeedback(Button("Action"), true); }, plain),
+        [] { return NativeFeedback(Button("Action")); }
+    );
+    CheckFeedback(
+        Application([] { return CssFeedback(Text("Action"), false); }, plain),
+        [] { return NativeFeedback(Text("Action")); }
+    );
+    CheckStyleSheet();
+    CheckStyleSheetErrors();
 
     ExpectInvalid("padding -2px", "expected ':'");
     ExpectInvalid("padding:", "expected a value");
@@ -506,7 +604,7 @@ int main() {
     ExpectInvalid("padding: 2px; /*", "unterminated comment");
     ExpectInvalid("&:visited { color: white }", "unsupported keyword");
     ExpectInvalid("&:hover color: white", "expected '{'");
-    ExpectInvalid("&:hover { color: white", "unterminated interaction state block");
+    ExpectInvalid("&:hover { color: white", "unterminated CSS block");
     ExpectInvalid("&:active { padding: 1px }", "unsupported property in an interaction state block");
     ExpectInvalid("&:focus-visible { color: }", "expected a value");
   } catch (const std::exception& error) {

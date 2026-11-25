@@ -1,6 +1,6 @@
 # Lib-CSS
 
-Apply inline CSS declarations to [HuxerUI](https://github.com/HuxerUI/HuxerUI) views with `.With(Css("..."))`. Lib-CSS translates supported declarations into HuxerUI modifiers, so they participate in the view's normal layout and drawing.
+Style [HuxerUI](https://github.com/HuxerUI/HuxerUI) views with packaged CSS classes or inline declarations. Lib-CSS translates CSS into HuxerUI modifiers that participate in the view's normal layout and drawing.
 
 ## Integration
 
@@ -28,7 +28,54 @@ huxerui_use_library(my_app
 )
 ```
 
-Include [`<huxerui/css.h>`](include/huxerui/css.h) and use `css::Css` with any view that accepts the corresponding HuxerUI modifiers.
+Include [`<huxerui/css.h>`](include/huxerui/css.h) to use `css::CssClass` and `css::Css`.
+
+## Packaged style sheets
+
+Save a CSS file at `resources/raw/styles.css` in the application's resource root.
+
+```css
+.button {
+  padding: 8px 16px;
+  border-radius: 8px;
+}
+
+.primary {
+  background-color: #3730a3;
+  color: white;
+}
+
+.primary:hover {
+  background-color: #4f46e5;
+}
+```
+
+Register the sheet with its generated raw resource key, then pass one or more class names to `CssClass()`.
+
+```cpp
+#include <huxerui/css.h>
+
+#include <app_resources.h>
+
+using namespace huxerui;
+
+View App() {
+  return Button("Save")
+      .OnClick([] {})
+      .With(css::CssClass("button", "primary"));
+}
+
+const Application application{
+    App,
+    {.application_hooks = {css::InstallStyleSheet(app::raw::styles_css)}},
+};
+```
+
+`InstallStyleSheet()` reads and parses one sheet per application Runtime before opening the first window. Each `CssClass()` uses the same parsed sheet. Pass case-sensitive class names without a leading dot. An unknown name or a missing registration reports an error. Errors in the sheet report the resource key, line and column, and the selector when available.
+
+The sheet accepts simple class selectors and the state suffixes `:hover`, `:active`, and `:focus-visible`. Repeated class rules and multiple selected classes apply in file order, regardless of the order of class names passed to `CssClass()`. State properties for the selected classes merge into one `Indication`. A later modifier such as `Padding(12.0F)` can still override the corresponding base property.
+
+## Inline styles
 
 ```cpp
 #include <huxerui/css.h>
@@ -113,7 +160,7 @@ Separate declarations with semicolons. CSS comments and an optional final semico
 
 ## Preview and tests
 
-The [preview app](examples/preview) demonstrates gradients, shadows, container alignment, pointer cursors, interaction styles, and native modifier overrides. Run it on macOS from the repository root.
+The [preview app](examples/preview) demonstrates inline declarations, native overrides, and interaction styles loaded from a [packaged CSS file](examples/preview/resources/raw/styles.css). Run it on macOS from the repository root.
 
 ```sh
 cd examples/preview
@@ -128,7 +175,7 @@ cmake --build build/tests
 ctest --test-dir build/tests --output-on-failure
 ```
 
-The [test suite](tests/css.cpp) compares layout and paint output against equivalent HuxerUI modifiers and checks override order, cursor requests, interaction states, shorthand values, and invalid inputs.
+The [test suite](tests/css.cpp) compares layout and paint output against equivalent HuxerUI modifiers and checks class selection, override order, cursor requests, interaction states, shorthand values, and invalid inputs.
 
 ## License
 

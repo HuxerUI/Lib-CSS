@@ -1,0 +1,24 @@
+.button {
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.button:focus-visible {
+  border: 2px solid #a5b4fc;
+}
+
+.primary {
+  background-color: #3730a3;
+  color: white;
+  border: 2px solid #3730a3;
+}
+
+.primary:hover {
+  background-color: #4f46e5;
+}
+
+.primary:active {
+  background-color: #27215e;
+  border: 2px solid #27215e;
+}

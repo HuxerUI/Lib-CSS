@@ -1,0 +1,6 @@
+:root {
+  --first: var(--second);
+  --second: var(--first);
+}
+
+.button { color: var(--first); }

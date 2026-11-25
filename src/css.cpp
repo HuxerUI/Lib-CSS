@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include <huxerui/animation.h>
 #include <huxerui/indication.h>
 
 namespace huxerui::css {
@@ -27,9 +28,14 @@ using Property = std::variant<
     Padding, Border, CornerRadius, Shadow, Background, Foreground, FontSize, Spacing, MainAlign, CrossAlign,
     PointerCursor>;
 
+using TransformOperation = std::variant<Offset, Scale, Rotation>;
+using TransformList = std::vector<TransformOperation>;
+
 struct BaseRule {
   std::vector<Property> properties;
   Frame frame;
+  std::optional<float> opacity;
+  std::optional<TransformList> transform;
 };
 
 } // namespace
@@ -56,9 +62,10 @@ struct Token {
   std::size_t offset = 0;
   std::string_view property{};
   const SheetSource* source = nullptr;
+  bool fixed_offset = false;
 
   Token Slice(std::size_t start, std::size_t length, std::string_view property_name) const {
-    return {text.substr(start, length), offset + start, property_name, source};
+    return {text.substr(start, length), offset + (fixed_offset ? 0 : start), property_name, source, fixed_offset};
   }
 };
 
@@ -117,6 +124,10 @@ bool IsClassName(std::string_view name) {
   });
 }
 
+bool IsVariableName(std::string_view name) {
+  return name.size() > 2 && name.starts_with("--") && IsClassName(name);
+}
+
 struct Declaration {
   Token name;
   std::array<Token, 5> values{};
@@ -149,6 +160,11 @@ public:
     if (!At(character)) return false;
     ++position_;
     return true;
+  }
+
+  Token Remaining() {
+    SkipTrivia();
+    return input_.Slice(position_, std::string_view::npos, input_.property);
   }
 
   Token Read(std::string_view property = {}) {
@@ -186,6 +202,15 @@ public:
     return token;
   }
 
+  Token ReadValue(std::string_view property) {
+    SkipTrivia();
+    const auto start = position_;
+    while (!Empty() && !At(';') && !At('}')) {
+      if (!Consume(',') && !Consume('/')) Read(property);
+    }
+    return input_.Slice(start, position_ - start, property);
+  }
+
 private:
   bool StartsComment() const {
     return input_.text.substr(position_).starts_with("/*");
@@ -215,9 +240,21 @@ private:
   std::size_t position_ = 0;
 };
 
-Declaration ReadDeclaration(ValueReader& reader) {
-  Declaration declaration{.name = reader.Read()};
-  if (!reader.Consume(':')) Invalid(declaration.name, "expected ':' after the property name");
+Token ReadDeclarationName(ValueReader& reader) {
+  const Token name = reader.Read();
+  if (!reader.Consume(':')) Invalid(name, "expected ':' after the property name");
+  return name;
+}
+
+Declaration ReadDeclarationValues(ValueReader& reader, Token name) {
+  Declaration declaration{.name = name};
+  if (MatchesKeyword(name.text, "transform")) {
+    const auto value = reader.ReadValue(name.text);
+    if (value.text.empty()) Invalid(name, "expected a value");
+    declaration.values[0] = value;
+    declaration.value_count = 1;
+    return declaration;
+  }
   while (!reader.Empty() && !reader.At('}') && !reader.Consume(';')) {
     if (reader.At(',')) Invalid(declaration.name, "expected a single value or layer");
     if (declaration.value_count == declaration.values.size()) Invalid(declaration.name, "too many values");
@@ -225,6 +262,10 @@ Declaration ReadDeclaration(ValueReader& reader) {
   }
   if (declaration.value_count == 0) Invalid(declaration.name, "expected a value");
   return declaration;
+}
+
+Declaration ReadDeclaration(ValueReader& reader) {
+  return ReadDeclarationValues(reader, ReadDeclarationName(reader));
 }
 
 struct FunctionValue {
@@ -288,14 +329,16 @@ float ParseColorComponent(Token value, float number_scale) {
   return std::clamp(fraction, 0.0F, 1.0F);
 }
 
-float ParseHue(Token value) {
+float ParseAngleTurns(Token value, bool unitless_degrees = false) {
   constexpr std::pair<std::string_view, float> angle_units[] = {
       {"grad", 400.0F}, {"deg", 360.0F}, {"rad", 2.0F * std::numbers::pi_v<float>}, {"turn", 1.0F},
   };
   for (const auto& [unit, period] : angle_units) {
     if (HasSuffix(value.text, unit)) return std::fmod(ParseNumber(value, unit.size()), period) / period;
   }
-  return std::fmod(ParseNumber(value), 360.0F) / 360.0F;
+  const float degrees = ParseNumber(value);
+  if (!unitless_degrees && degrees != 0.0F) Invalid(value, "expected an angle with a unit or zero");
+  return std::fmod(degrees, 360.0F) / 360.0F;
 }
 
 Color ParseFunctionalColor(const FunctionValue& function, Token value, bool rgb) {
@@ -321,7 +364,7 @@ Color ParseFunctionalColor(const FunctionValue& function, Token value, bool rgb)
     };
   }
 
-  const float turns = ParseHue(first);
+  const float turns = ParseAngleTurns(first, true);
   const float hue = turns < 0.0F ? turns + 1.0F : turns;
   const float saturation = std::clamp(ParsePercentage(second), 0.0F, 1.0F);
   const float lightness = std::clamp(ParsePercentage(third), 0.0F, 1.0F);
@@ -516,6 +559,54 @@ void ValidateBounds(std::optional<float> minimum, std::optional<float> maximum, 
   }
 }
 
+TransformOperation ParseTransformFunction(Token token) {
+  const auto function = AsFunction(token);
+  if (!function) Invalid(token, "expected a transform function");
+  const auto name = function->name;
+  const bool translate = MatchesKeyword(name, "translate");
+  const bool translate_x = MatchesKeyword(name, "translatex");
+  const bool translate_y = MatchesKeyword(name, "translatey");
+  const bool scale = MatchesKeyword(name, "scale");
+  if (!translate && !translate_x && !translate_y && !scale && !MatchesKeyword(name, "rotate")) {
+    Invalid(token, "unsupported CSS transform function");
+  }
+
+  ValueReader arguments(function->arguments);
+  const auto first = arguments.Read();
+  if (translate) {
+    const float x = ParseLength(first, true);
+    const float y = arguments.Consume(',') ? ParseLength(arguments.Read(), true) : 0.0F;
+    if (!arguments.Empty()) Invalid(token, "expected one or two comma-separated translation lengths");
+    return Offset(Point{x, y});
+  }
+  if (!arguments.Empty()) Invalid(token, "expected one transform argument");
+  if (translate_x || translate_y) {
+    const float distance = ParseLength(first, true);
+    return Offset(translate_x ? Point{distance, 0.0F} : Point{0.0F, distance});
+  }
+  if (scale) {
+    const float factor = ParseNumber(first);
+    if (factor < 0.0F) Invalid(first, "expected a non-negative scale");
+    return Scale(factor);
+  }
+  return Rotation(ParseAngleTurns(first) * 360.0F);
+}
+
+TransformList ParseTransform(Token value) {
+  ValueReader reader(value);
+  const auto first = reader.Read();
+  if (MatchesKeyword(first.text, "none")) {
+    if (!reader.Empty()) Invalid(first, "transform none must appear alone");
+    return {};
+  }
+  TransformList transform;
+  transform.push_back(ParseTransformFunction(first));
+  while (!reader.Empty()) {
+    transform.push_back(ParseTransformFunction(reader.Read()));
+  }
+  return transform;
+}
+
 Property ParseProperty(const Declaration& declaration) {
   const auto name = declaration.name.text;
   if (MatchesKeyword(name, "padding")) {
@@ -567,8 +658,18 @@ void ApplyStateProperty(IndicationLayer& layer, const Declaration& declaration) 
 }
 
 FrameField AddBaseProperty(const Declaration& declaration, BaseRule& rule) {
+  const auto name = declaration.name.text;
+  if (MatchesKeyword(name, "opacity")) {
+    const auto value = declaration.SingleValue();
+    rule.opacity = value.text.ends_with('%') ? ParsePercentage(value) : ParseNumber(value);
+    return nullptr;
+  }
+  if (MatchesKeyword(name, "transform")) {
+    rule.transform = ParseTransform(declaration.SingleValue());
+    return nullptr;
+  }
   const auto dimension = std::ranges::find_if(dimensions, [&](const auto& entry) {
-    return MatchesKeyword(declaration.name.text, entry.first);
+    return MatchesKeyword(name, entry.first);
   });
   if (dimension == dimensions.end()) {
     rule.properties.push_back(ParseProperty(declaration));
@@ -590,18 +691,22 @@ template <class Apply> void ReadBlock(ValueReader& reader, Token selector, Apply
   while (!reader.Consume('}')) {
     if (reader.Empty()) Invalid(selector, "unterminated CSS block");
     if (reader.Consume(';')) continue;
-    apply(ReadDeclaration(reader));
+    apply(reader);
   }
 }
 
+void AddStateProperty(std::optional<IndicationLayer>& layer, const Declaration& declaration) {
+  if (!layer) {
+    layer.emplace(
+        IndicationLayer{.placement = IndicationPlacement::BehindContent, .enter = SnapSpec{}, .exit = SnapSpec{}}
+    );
+  }
+  ApplyStateProperty(*layer, declaration);
+}
+
 void ReadStateBlock(ValueReader& reader, Token selector, std::optional<IndicationLayer>& layer) {
-  ReadBlock(reader, selector, [&](const Declaration& declaration) {
-    if (!layer) {
-      layer.emplace(
-          IndicationLayer{.placement = IndicationPlacement::BehindContent, .enter = SnapSpec{}, .exit = SnapSpec{}}
-      );
-    }
-    ApplyStateProperty(*layer, declaration);
+  ReadBlock(reader, selector, [&](ValueReader& body) {
+    AddStateProperty(layer, ReadDeclaration(body));
   });
 }
 
@@ -611,9 +716,19 @@ void ApplyProperties(ModifierContext& context, const std::vector<Property>& prop
   }
 }
 
-void ApplyFrameAndIndication(ModifierContext& context, const Frame& frame, const Indication& indication) {
+void ApplyMergedProperties(ModifierContext& context, const Frame& frame, std::optional<float> opacity,
+                           const TransformList* transform, const Indication& indication) {
   if (frame != Frame{}) {
     context.Apply(frame);
+  }
+  if (opacity) {
+    context.Apply(Opacity(*opacity));
+  }
+  if (transform) {
+    // CSS applies the rightmost function first. HuxerUI applies native transforms in modifier order.
+    for (auto operation = transform->rbegin(); operation != transform->rend(); ++operation) {
+      std::visit([&context](const auto& value) { context.Apply(value); }, *operation);
+    }
   }
   if (indication.hover || indication.press || indication.focus) {
     context.Apply(indication);
@@ -639,38 +754,163 @@ struct StateRule {
 
 using Rule = std::variant<BaseRule, StateRule>;
 
+struct RawDeclaration {
+  Token name;
+  Token value;
+};
+
+RawDeclaration ReadRawDeclaration(ValueReader& reader) {
+  const auto name = ReadDeclarationName(reader);
+  const auto value = reader.ReadValue(name.text);
+  if (value.text.empty()) Invalid(name, "expected a value");
+  return {name, value};
+}
+
+class SheetVariables {
+public:
+  void Set(Token name, Token value) {
+    if (!IsVariableName(name.text)) Invalid(name, "expected a custom property name");
+    variables_.insert_or_assign(name.text, Variable{.value = value});
+  }
+
+  std::optional<std::string> Expand(Token value) {
+    ValueReader reader(value);
+    std::optional<std::string> result;
+    std::size_t copied = 0;
+    while (!reader.Empty()) {
+      if (reader.Consume(',') || reader.Consume('/')) continue;
+      const auto token = reader.Read();
+      const auto function = AsFunction(token);
+      if (!function) continue;
+
+      const bool is_reference = MatchesKeyword(function->name, "var");
+      const auto replaced = is_reference ? token : function->arguments;
+      const auto replacement = is_reference
+                                 ? std::optional<std::string>(ResolveReference(token, function->arguments))
+                                 : Expand(function->arguments);
+      if (!replacement) continue;
+
+      if (!result) result.emplace();
+      const auto start = replaced.offset - value.offset;
+      result->append(value.text.substr(copied, start - copied));
+      // Keep substituted tokens separate from adjacent literals.
+      if (is_reference) result->push_back(' ');
+      result->append(*replacement);
+      if (is_reference) result->push_back(' ');
+      copied = start + replaced.text.size();
+    }
+    if (result) result->append(value.text.substr(copied));
+    return result;
+  }
+
+private:
+  struct Variable {
+    Token value;
+    std::optional<std::string> resolved{};
+    bool resolving = false;
+  };
+
+  std::string ResolveReference(Token reference, Token arguments) {
+    ValueReader reader(arguments);
+    const auto name = reader.Read();
+    if (!IsVariableName(name.text)) Invalid(name, "expected a custom property name in var()");
+    const bool has_fallback = reader.Consume(',');
+    if (!has_fallback && !reader.Empty()) Invalid(name, "expected ',' before the var() fallback");
+
+    const auto found = variables_.find(name.text);
+    if (found == variables_.end()) {
+      if (!has_fallback) Invalid(name, "undefined CSS variable");
+      const auto fallback = reader.Remaining();
+      auto replacement = Expand(fallback);
+      return replacement ? std::move(*replacement) : std::string(fallback.text);
+    }
+
+    auto& variable = found->second;
+    if (variable.resolving) Invalid(reference, "cyclic CSS variable reference");
+    if (!variable.resolved) {
+      variable.resolving = true;
+      auto replacement = Expand(variable.value);
+      variable.resolved = replacement ? std::move(*replacement) : std::string(variable.value.text);
+      variable.resolving = false;
+    }
+    return *variable.resolved;
+  }
+
+  std::unordered_map<std::string_view, Variable> variables_;
+};
+
+struct Selector {
+  std::string_view name;
+  StateField state = nullptr;
+};
+
+Selector ReadSelector(ValueReader& reader) {
+  const auto selector = reader.Read();
+  if (!selector.text.starts_with('.') || !IsClassName(selector.text.substr(1))) {
+    Invalid(selector, "expected a class selector");
+  }
+  Selector result{selector.text.substr(1)};
+  if (reader.Consume(':')) {
+    const auto state = reader.Read();
+    if (state.offset != selector.offset + selector.text.size() + 1) {
+      Invalid(state, "expected the state immediately after the class name");
+    }
+    result.state = ParseKeyword(state, states);
+  }
+  return result;
+}
+
+struct SheetRule {
+  std::string_view selector_text;
+  std::vector<Selector> selectors;
+  std::vector<RawDeclaration> declarations;
+};
+
 class StyleSheet {
 public:
   StyleSheet(std::string name, std::string_view text) : name_(std::move(name)) {
     if (text.starts_with("\xef\xbb\xbf")) text.remove_prefix(3);
     SheetSource source{name_, text, {}};
+    const SheetSource variable_source{name_, text, ":root"};
     ValueReader reader(Token{.text = text, .source = &source});
+    SheetVariables variables;
+    std::vector<SheetRule> parsed;
     for (;;) {
       source.selector = {};
-      if (reader.Empty()) break;
-      const Token selector = reader.Read();
-      source.selector = selector.text;
-      if (!selector.text.starts_with('.') || !IsClassName(selector.text.substr(1))) {
-        Invalid(selector, "expected a class selector");
+      const auto start = reader.Remaining();
+      if (start.text.empty()) break;
+      if (reader.Consume(':')) {
+        const auto name = reader.Read();
+        if (!MatchesKeyword(name.text, "root") || name.offset != start.offset + 1) {
+          Invalid(name, "expected :root");
+        }
+        source.selector = ":root";
+        ReadBlock(reader, name, [&](ValueReader& body) {
+          auto declaration = ReadRawDeclaration(body);
+          declaration.value.source = &variable_source;
+          variables.Set(declaration.name, declaration.value);
+        });
+        continue;
       }
 
-      classes_[std::string(selector.text.substr(1))].push_back(rules_.size());
-      if (reader.Consume(':')) {
-        const Token state = reader.Read();
-        if (state.offset != selector.offset + selector.text.size() + 1) {
-          Invalid(state, "expected the state immediately after the class name");
-        }
-        source.selector = text.substr(selector.offset, state.offset + state.text.size() - selector.offset);
-        StateRule rule{ParseKeyword(state, states)};
-        ReadStateBlock(reader, state, rule.layer);
-        rules_.emplace_back(std::move(rule));
-      } else {
-        BaseRule rule;
-        ReadBlock(reader, selector, [&](const Declaration& declaration) {
-          AddBaseProperty(declaration, rule);
-        });
-        rules_.emplace_back(std::move(rule));
+      SheetRule rule;
+      do {
+        rule.selectors.push_back(ReadSelector(reader));
+      } while (reader.Consume(','));
+      rule.selector_text = text.substr(start.offset, reader.Remaining().offset - start.offset);
+      while (!rule.selector_text.empty() && IsWhitespace(rule.selector_text.back())) {
+        rule.selector_text.remove_suffix(1);
       }
+      source.selector = rule.selector_text;
+      ReadBlock(reader, start.Slice(0, rule.selector_text.size(), {}), [&](ValueReader& body) {
+        rule.declarations.push_back(ReadRawDeclaration(body));
+      });
+      parsed.push_back(std::move(rule));
+    }
+
+    for (const auto& rule : parsed) {
+      source.selector = rule.selector_text;
+      CompileRule(rule, variables);
     }
   }
 
@@ -685,10 +925,50 @@ public:
       selected.insert(selected.end(), indices.begin(), indices.end());
     }
     std::ranges::sort(selected);
+    const auto duplicates = std::ranges::unique(selected);
+    selected.erase(duplicates.begin(), duplicates.end());
     ApplyRules(context, selected);
   }
 
 private:
+  void CompileRule(const SheetRule& rule, SheetVariables& variables) {
+    const bool has_base = std::ranges::any_of(rule.selectors, [](const auto& selector) { return !selector.state; });
+    const bool has_state = std::ranges::any_of(rule.selectors, [](const auto& selector) { return selector.state; });
+    BaseRule base;
+    std::optional<IndicationLayer> layer;
+    for (const auto& declaration : rule.declarations) {
+      auto value = declaration.value;
+      const auto expanded = variables.Expand(value);
+      if (expanded) {
+        // Expanded values have no byte-for-byte source mapping. Report errors at the original declaration value.
+        value.text = *expanded;
+        value.fixed_offset = true;
+      }
+      ValueReader reader(value);
+      const auto resolved = ReadDeclarationValues(reader, declaration.name);
+      if (has_base) AddBaseProperty(resolved, base);
+      if (has_state) AddStateProperty(layer, resolved);
+    }
+    if (has_base) {
+      IndexRule(rule.selectors, nullptr);
+      rules_.emplace_back(std::move(base));
+    }
+    for (const auto& entry : states) {
+      if (IndexRule(rule.selectors, entry.second)) rules_.emplace_back(StateRule{entry.second, layer});
+    }
+  }
+
+  bool IndexRule(const std::vector<Selector>& selectors, StateField state) {
+    bool matched = false;
+    for (const auto& selector : selectors) {
+      if (selector.state != state) continue;
+      auto& indices = classes_[std::string(selector.name)];
+      if (indices.empty() || indices.back() != rules_.size()) indices.push_back(rules_.size());
+      matched = true;
+    }
+    return matched;
+  }
+
   const std::vector<std::size_t>& FindRules(const std::string& name) const {
     const auto found = classes_.find(name);
     if (found == classes_.end()) {
@@ -699,6 +979,8 @@ private:
 
   void ApplyRules(ModifierContext& context, std::span<const std::size_t> selected) const {
     Frame frame;
+    std::optional<float> opacity;
+    const TransformList* transform = nullptr;
     Indication indication;
     for (const auto index : selected) {
       const auto& rule = rules_[index];
@@ -711,10 +993,12 @@ private:
           const auto field = dimension.second;
           if (base.frame.*field) frame.*field = base.frame.*field;
         }
+        if (base.opacity) opacity = base.opacity;
+        if (base.transform) transform = &*base.transform;
       }
     }
     // The SDK validates frame dimensions on each Apply, so intermediate rule values must be merged first.
-    ApplyFrameAndIndication(context, frame, indication);
+    ApplyMergedProperties(context, frame, opacity, transform, indication);
   }
 
   std::string name_;
@@ -757,8 +1041,10 @@ Css::Css(std::string_view declarations) {
 
 void Css::Configure(ModifierContext& context) const {
   if (!impl_) return;
-  ApplyProperties(context, impl_->base.properties);
-  ApplyFrameAndIndication(context, impl_->base.frame, impl_->indication);
+  const auto& base = impl_->base;
+  ApplyProperties(context, base.properties);
+  ApplyMergedProperties(context, base.frame, base.opacity, base.transform ? &*base.transform : nullptr,
+                        impl_->indication);
 }
 
 CssClass::CssClass(std::initializer_list<std::string_view> names) {

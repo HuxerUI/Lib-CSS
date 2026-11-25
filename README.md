@@ -35,18 +35,23 @@ Include [`<huxerui/css.h>`](include/huxerui/css.h) to use `css::CssClass` and `c
 Save a CSS file at `resources/raw/styles.css` in the application's resource root.
 
 ```css
-.button {
+:root {
+  --accent: #3730a3;
+  --radius: 8px;
+}
+
+.button, .secondary {
   padding: 8px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .primary {
-  background-color: #3730a3;
+  background-color: var(--accent);
   color: white;
 }
 
 .primary:hover {
-  background-color: #4f46e5;
+  background-color: var(--accent-hover, #4f46e5);
 }
 ```
 
@@ -73,7 +78,9 @@ const Application application{
 
 `InstallStyleSheet()` reads and parses one sheet per application Runtime before opening the first window. Each `CssClass()` uses the same parsed sheet. Pass case-sensitive class names without a leading dot. An unknown name or a missing registration reports an error. Errors in the sheet report the resource key, line and column, and the selector when available.
 
-The sheet accepts simple class selectors and the state suffixes `:hover`, `:active`, and `:focus-visible`. Repeated class rules and multiple selected classes apply in file order, regardless of the order of class names passed to `CssClass()`. State properties for the selected classes merge into one `Indication`. A later modifier such as `Padding(12.0F)` can still override the corresponding base property.
+The sheet accepts simple class selectors and the state suffixes `:hover`, `:active`, and `:focus-visible`. Separate selectors with commas to share a rule. If a View matches several selectors in a group, its base rule or each matching state rule applies once. Repeated class rules and multiple selected classes apply in file order, regardless of the order of names passed to `CssClass()`. Selected state properties merge into one `Indication`. A later modifier such as `Padding(12.0F)` can still override the corresponding base property.
+
+Declare shared, case-sensitive custom properties in `:root`. The last definition of a name in the file wins, including for uses earlier in the file. Use `var(--name)` in base and interaction declarations, including inside gradients or color functions. `var(--name, fallback)` uses the fallback when the name is missing. Missing references without a fallback and cyclic references report a source location while loading the sheet. Substituted values must satisfy the target property's syntax.
 
 ## Inline styles
 
@@ -123,7 +130,7 @@ return Button("Save")
     )"));
 ```
 
-State blocks accept `background`, `background-color`, `color`, `border`, and `border-radius`. State `color` follows the SDK's indication foreground rules for `Text`, `Button` labels, and vector images. Repeated blocks for the same state merge by property in declaration order. HuxerUI selects one layer at a time in active, hover, then visible-focus order. A selected layer draws its fill over the base fill behind the content and uses the base appearance for unspecified properties. State changes apply immediately and preserve layout.
+State blocks accept `background`, `background-color`, `color`, `border`, and `border-radius`. State `color` follows the SDK's indication foreground rules for `Text` and vector images. Repeated blocks for the same state merge by property in declaration order. HuxerUI selects one layer at a time in active, hover, then visible-focus order. A selected layer draws its fill over the base fill behind the content and uses the base appearance for unspecified properties. State changes apply immediately and preserve layout.
 
 A declaration in any state block replaces the View's default `Indication`, including its ripple. The theme's keyboard focus ring is drawn separately. `.OnClick()` can appear before or after `.With()`. Use a clickable or focusable View to receive the corresponding interaction states.
 
@@ -143,6 +150,8 @@ A declaration in any state block replaces the View's default `Indication`, inclu
 | `border-radius` | One to four lengths in CSS corner shorthand order |
 | `box-shadow` | One outer shadow with two offsets, optional blur and spread, and an explicit color, or `none` |
 | `cursor` | `default`, `pointer`, `text`, `crosshair`, `move`, `grab`, `grabbing`, `ew-resize`, `ns-resize`, `nesw-resize`, `nwse-resize`, `not-allowed`, or `wait` |
+| `opacity` | A number or percentage, clamped to the unit interval |
+| `transform` | `none` or a sequence of `translate(x[, y])`, `translateX(x)`, `translateY(y)`, `scale(factor)`, and `rotate(angle)` |
 
 One `px` is one HuxerUI logical unit. Lengths require `px` or unitless zero. The size, spacing, padding, border and corner lengths are non-negative. For example, `width: 120px; padding: 10px` requests an outer width of 120 and leaves 100 logical units for content when the parent grants that width. Borders paint inside the bounds. Alignment applies to the main or cross axis of the existing layout. Cursor shapes follow the HuxerUI hit route and are mapped by the host.
 
@@ -158,9 +167,15 @@ Provide the horizontal and vertical offset, followed by optional blur and spread
 
 Separate declarations with semicolons. CSS comments and an optional final semicolon are accepted. Malformed declarations and unsupported properties or values throw `std::invalid_argument` at construction. The diagnostic includes a zero-based byte offset.
 
+### Presentation
+
+Opacity and transforms preserve the View's measured size. Translation accepts signed `px` lengths or unitless zero. Scale is uniform and non-negative. Scale and rotation use the View's center, and rotation accepts `deg`, `rad`, `grad`, `turn`, or unitless zero. In `transform: translate(12px, -4px) scale(1.2)`, the scale acts first.
+
+The last declaration of each property wins within one `Css` or `CssClass` modifier. `transform: none` clears an earlier list in that modifier. Separate CSS and native presentation modifiers compose in `.With()` order, with opacity factors multiplying. These properties are available in base declarations.
+
 ## Preview and tests
 
-The [preview app](examples/preview) demonstrates inline declarations, native overrides, and interaction styles loaded from a [packaged CSS file](examples/preview/resources/raw/styles.css). Run it on macOS from the repository root.
+The [preview app](examples/preview) demonstrates inline declarations, native overrides, and interaction and presentation styles loaded from a [packaged CSS file](examples/preview/resources/raw/styles.css). Run it on macOS from the repository root.
 
 ```sh
 cd examples/preview
@@ -175,7 +190,7 @@ cmake --build build/tests
 ctest --test-dir build/tests --output-on-failure
 ```
 
-The [test suite](tests/css.cpp) compares layout and paint output against equivalent HuxerUI modifiers and checks class selection, override order, cursor requests, interaction states, shorthand values, and invalid inputs.
+The [test suite](tests/css.cpp) compares layout and paint output against equivalent HuxerUI modifiers and checks grouped class selection, variable expansion, override order, cursor requests, interaction states, and invalid inputs.
 
 ## License
 

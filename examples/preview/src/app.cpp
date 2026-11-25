@@ -59,8 +59,14 @@ View App() {
           Text("Preview").With(sample_style, Padding(18.0F))),
       Sample("Background override", ".With(sample_style, Background(...))",
           Text("Preview").With(sample_style, Background(Color::Rgb(4, 120, 87)))),
-      Sample("Packaged styles", "Hover, press, or focus with Tab",
-          Button("Try it").OnClick([] {}).With(CssClass("button", "primary"))),
+      Sample(
+          "Packaged styles",
+          "Shared variables and interaction rules",
+          Row {
+            Button("Primary").OnClick([] {}).With(CssClass("button", "primary")),
+            Button("Secondary").OnClick([] {}).With(CssClass("secondary")),
+          }.With(Spacing(8.0F))
+      ),
       Sample(
           "Container alignment",
           "justify-content: space-between; align-items: center",
@@ -68,6 +74,14 @@ View App() {
             Text("First").With(sample_style),
             Text("Last").With(sample_style),
           }.With(alignment_style)
+      ),
+      Sample(
+          "Presentation",
+          "Opacity, translation, rotation and scale",
+          Row {
+            Text("Original").With(sample_style),
+            Text("Transformed").With(sample_style, CssClass("transformed")),
+          }.With(Spacing(20.0F), CrossAlign(CrossAxisAlignment::Center))
       ),
     }.With(Padding(20.0F), Spacing(12.0F), CrossAlign(CrossAxisAlignment::Stretch))),
   };

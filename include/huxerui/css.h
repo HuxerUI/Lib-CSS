@@ -22,6 +22,8 @@ namespace huxerui::css {
 /// @return A hook to add to AppOptions::application_hooks.
 ///
 /// Register one sheet per application. The hook reads and parses it once per Runtime and shares it across windows.
+/// The sheet supports comma-separated class selectors and global custom properties declared in `:root`.
+/// References using `var(--name, fallback)` are resolved while loading the sheet.
 /// The hook propagates resource errors and throws std::invalid_argument for invalid CSS.
 ApplicationHook InstallStyleSheet(RawResource resource);
 
@@ -41,6 +43,9 @@ ApplicationHook InstallStyleSheet(RawResource resource);
 ///
 /// Colors accept hexadecimal forms, black, white, transparent, and numeric rgb(), rgba(), hsl(), and hsla()
 /// functions. Font size takes a positive length.
+///
+/// Opacity and basic 2D transforms affect presentation while preserving layout. Transform lists accept translation,
+/// uniform non-negative scale, and rotation around the View center. Separate native modifiers compose with CSS effects.
 ///
 /// Use `&:hover { ... }`, `&:active { ... }`, and `&:focus-visible { ... }` for interaction feedback.
 /// Each block accepts background, background-color, color, border, and border-radius. State backgrounds blend

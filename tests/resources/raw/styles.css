@@ -1,5 +1,5 @@
 .base {
-  min-width: 100px;
+  min-width: var(--base-width);
   padding: 2px;
 }
 
@@ -13,33 +13,70 @@
   padding: 7px;
 }
 
-.single {
-  width: 80px;
-  padding: 5px;
+.single, .sized {
+  width: var(--optional-width, var(--single-width));
+  padding: var(--single-padding);
 }
 
 .action {
   background-color: black;
   border: 1px solid white;
-  color: white;
+  color: var(--action-foreground, white);
 }
 
 .action:hover {
   background-color: black;
-  color: #c1dfed;
+  color: var(--hover-foreground);
 }
 
-.action:focus-visible {
+.action:focus-visible, .primary:focus-visible {
   border: 2px solid white;
   border-radius: 2px 4px;
 }
 
 .primary:hover {
-  background-color: #2563eb;
+  background-color: rgb(var(--hover-channels));
 }
 
 .primary:active {
-  background: #059669;
+  background: var(--active-background);
+  border: var(--absent-border, none);
+}
+
+.primary:active, .dark-text {
   color: black;
-  border: none;
+}
+
+:root {
+  --base-width: 100px;
+  --single-width: 75px;
+  --single-padding: 5px 5px;
+  --hover-foreground: var(--highlight);
+  --hover-channels: 37, 99, 235;
+  --active-background: #059669;
+  --highlight: #c1dfed;
+}
+
+:root {
+  --single-width: 80px;
+  --effect-opacity: 60%;
+}
+
+.moved {
+  opacity: 0.2;
+  transform: translateX(100px);
+}
+
+.effect {
+  opacity: var(--effect-opacity);
+  transform: translate(19px, -3px) scale(2);
+}
+
+.reset {
+  opacity: 125%;
+  transform: none;
+}
+
+.rotated {
+  transform: translateX(5px) translateY(-4px) rotate(.25turn);
 }

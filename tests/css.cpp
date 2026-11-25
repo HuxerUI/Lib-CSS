@@ -468,6 +468,64 @@ public:
   int sheet_reads = 0;
 };
 
+View PresentationPage(View transformed, View reset, View rotated) {
+  return Column {
+    std::move(transformed),
+    std::move(reset),
+    std::move(rotated),
+  }.With(Padding(40.0F), Spacing(24.0F), CrossAlign(CrossAxisAlignment::Start));
+}
+
+View NativePresentation() {
+  return PresentationPage(
+      Marker("moved").With(Opacity(0.6F), Scale(2.0F), Offset(Point{19.0F, -3.0F})),
+      Marker("reset"),
+      Marker("rotated").With(
+          Rotation(90.0F), Offset(Point{0.0F, -4.0F}), Offset(Point{5.0F, 0.0F}),
+          Opacity(0.5F), Offset(Point{4.0F, 1.0F})
+      )
+  );
+}
+
+void CheckPresentationStyles() {
+  const Application inline_css([] {
+    return PresentationPage(
+        Marker("moved").With(Css(R"(
+          opacity: 0.2;
+          opacity: 60%;
+          transform: translateX(100px);
+          transform: translate(19px, -3px) scale(2) translate(0) translate(0) translate(0) translate(0);
+        )")),
+        Marker("reset").With(Css("opacity: 0; opacity: 125%; transform: rotate(180deg); transform: none")),
+        Marker("rotated").With(
+            Css("transform: translateX(5px) translateY(-4px) rotate(.25turn)"),
+            Opacity(0.5F),
+            Offset(Point{4.0F, 1.0F})
+        )
+    );
+  }, {.show_debug_overlay = false});
+  UiTest inline_test(inline_css, TestOptions());
+  CheckSnapshot(inline_test, NativePresentation);
+  const auto moved = inline_test.Find(UiSelector::Key("moved")).One();
+  Check(moved.size == Size{16.0F, 10.0F}, "CSS presentation should preserve measured size");
+  Check(moved.bounds == Rect{51.0F, 32.0F, 32.0F, 20.0F}, "Unexpected CSS transform order");
+
+  const Application class_css([] {
+    return PresentationPage(
+        Marker("moved").With(CssClass("effect", "moved")),
+        Marker("reset").With(CssClass("reset", "effect", "moved")),
+        Marker("rotated").With(CssClass("rotated"), Opacity(0.5F), Offset(Point{4.0F, 1.0F}))
+    );
+  }, {
+      .show_debug_overlay = false,
+      .application_hooks = {InstallStyleSheet(css_fixture::raw::styles_css)},
+  });
+  auto options = TestOptions();
+  options.resource_provider = std::make_shared<StyleResources>();
+  UiTest class_test(class_css, options);
+  CheckSnapshot(class_test, NativePresentation);
+}
+
 void CheckStyleSheet() {
   const auto provider = std::make_shared<StyleResources>();
   auto options = TestOptions();
@@ -482,6 +540,7 @@ void CheckStyleSheet() {
       Bar().With(CssClass("accent", "base")).Key("second"),
       Bar().With(CssClass("base", "accent"), Padding(11.0F)).Key("override"),
       Bar().With(CssClass(std::string("single"))).Key("single"),
+      Bar().With(CssClass("sized")).Key("group"),
     }.With(CrossAlign(CrossAxisAlignment::Start));
   }, style_options);
   UiTest actual(cascade, options);
@@ -496,6 +555,7 @@ void CheckStyleSheet() {
   check("second", {100.0F, 24.0F}, 7.0F);
   check("override", {100.0F, 32.0F}, 11.0F);
   check("single", {80.0F, 20.0F}, 5.0F);
+  check("group", {80.0F, 20.0F}, 5.0F);
   actual.Pump();
   Check(provider->sheet_reads == 1, "Style sheet should load once for each application");
 
@@ -530,12 +590,16 @@ void CheckStyleSheetErrors() {
   });
   ExpectError<std::invalid_argument>([&] { const UiTest test(unknown, options); }, "unknown class `unknown`");
 
-  const Application invalid(root, {
-      .show_debug_overlay = false,
-      .application_hooks = {InstallStyleSheet(css_fixture::raw::invalid_css)},
-  });
-  ExpectError<std::invalid_argument>(
-      [&] { const UiTest test(invalid, options); }, "css_fixture:raw/invalid.css:2:10 in rule `.button:hover`");
+  const auto check_invalid_sheet = [&](const RawResource& resource, std::string_view diagnostic) {
+    const Application invalid(root, {
+        .show_debug_overlay = false,
+        .application_hooks = {InstallStyleSheet(resource)},
+    });
+    ExpectError<std::invalid_argument>([&] { const UiTest test(invalid, options); }, diagnostic);
+  };
+  check_invalid_sheet(css_fixture::raw::invalid_css, "css_fixture:raw/invalid.css:2:10 in rule `.button:hover`");
+  check_invalid_sheet(css_fixture::raw::cycle_css, "cycle.css:3:13 in rule `:root`");
+  check_invalid_sheet(css_fixture::raw::undefined_css, "near `--accent`: undefined CSS variable");
   ExpectError<std::invalid_argument>([] { const CssClass rejected(".button"); }, "invalid class name");
 }
 
@@ -576,6 +640,7 @@ int main() {
     );
     CheckStyleSheet();
     CheckStyleSheetErrors();
+    CheckPresentationStyles();
 
     ExpectInvalid("padding -2px", "expected ':'");
     ExpectInvalid("padding:", "expected a value");
@@ -600,7 +665,13 @@ int main() {
     ExpectInvalid("align-items: baseline", "unsupported keyword");
     ExpectInvalid("justify-content: stretch", "unsupported keyword");
     ExpectInvalid("cursor: auto", "unsupported keyword");
-    ExpectInvalid("opacity: 0.5", "unsupported CSS property");
+    ExpectInvalid("opacity: opaque", "expected a finite number");
+    ExpectInvalid("transform: translate(10%)", "expected a signed px length");
+    ExpectInvalid("transform: scale(-1)", "expected a non-negative scale");
+    ExpectInvalid("transform: rotate(45)", "expected an angle with a unit or zero");
+    ExpectInvalid("transform: matrix(1, 0, 0, 1, 0, 0)", "unsupported CSS transform function");
+    ExpectInvalid("transform: none scale(2)", "transform none must appear alone");
+    ExpectInvalid("&:hover { opacity: 0.8 }", "unsupported property in an interaction state block");
     ExpectInvalid("padding: 2px; /*", "unterminated comment");
     ExpectInvalid("&:visited { color: white }", "unsupported keyword");
     ExpectInvalid("&:hover color: white", "expected '{'");

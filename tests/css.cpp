@@ -74,12 +74,16 @@ UiTestOptions TestOptions() {
   return {.viewport = {320.0F, 240.0F}};
 }
 
-void CheckSnapshot(const UiTest& actual, RootFactory native) {
-  const Application reference_app(native, {.show_debug_overlay = false});
-  UiTest expected(reference_app, TestOptions());
+void CheckSnapshot(const UiTest& actual, const UiTest& expected) {
   const auto snapshot = actual.CaptureSnapshot();
   const auto reference = expected.CaptureSnapshot();
   if (snapshot != reference) throw std::runtime_error(snapshot.Diff(reference));
+}
+
+void CheckSnapshot(const UiTest& actual, RootFactory native) {
+  const Application reference_app(native, {.show_debug_overlay = false});
+  UiTest expected(reference_app, TestOptions());
+  CheckSnapshot(actual, expected);
 }
 
 void CheckEquivalent(RootFactory root, RootFactory native) {
@@ -366,6 +370,86 @@ void CheckCursor() {
   Check(host.CursorAt({112.0F, 10.0F}) == PointerCursorKind::Default, "CSS default should reset the cursor");
 }
 
+View FeedbackPage(View button) {
+  auto theme_spec = ThemeSpec::Default();
+  theme_spec.interactions.indication = Indication{
+      .hover = IndicationLayer{.foreground = marker_color},
+      .ripple = RippleEffect{.color = marker_color, .expansion = SnapSpec{}},
+  };
+  auto style = ButtonStyle::Default();
+  style.indication = theme_spec.interactions.indication;
+  ThemeDefinition theme(theme_spec);
+  theme.Set(style);
+  return Theme {std::move(theme), TestPage(std::move(button).With(Focusable()).Key("feedback"))};
+}
+
+View CssFeedback(View control, bool click_first) {
+  static const Css style(R"(
+    background-color: black;
+    border: 1px solid white;
+    &:hover { background-color: black; color: #c1dfed }
+    &:active { background: #059669; color: black; border: none }
+    &:focus-visible { border: 2px solid white; border-radius: 2px 4px }
+    &:hover { background-color: #2563eb }
+    color: white;
+  )");
+  if (click_first) return FeedbackPage(std::move(control).OnClick([] {}).With(style));
+  return FeedbackPage(std::move(control).With(style).OnClick([] {}));
+}
+
+View NativeFeedback(View control) {
+  return FeedbackPage(std::move(control).OnClick([] {}).With(
+      Background(Color::Black()),
+      Border{.color = Color::White(), .width = 1.0F},
+      Foreground(Color::White()),
+      Indication{
+          .focus = IndicationLayer{.border = Border{.color = Color::White(), .width = 2.0F},
+                                   .corner_radii = CornerRadii{2.0F, 4.0F, 2.0F, 4.0F},
+                                   .placement = IndicationPlacement::BehindContent,
+                                   .enter = SnapSpec{}, .exit = SnapSpec{}},
+          .hover = IndicationLayer{.fill = blue, .placement = IndicationPlacement::BehindContent,
+                                   .enter = SnapSpec{}, .exit = SnapSpec{}, .foreground = Color::Rgb(193, 223, 237)},
+          .press = IndicationLayer{.fill = green, .border = Border{.color = Color::Transparent(), .width = 0.0F},
+                                   .placement = IndicationPlacement::BehindContent,
+                                   .enter = SnapSpec{}, .exit = SnapSpec{}, .foreground = Color::Black()},
+      }
+  ));
+}
+
+void CheckFeedback(RootFactory root, RootFactory reference) {
+  const Application css(root, {.show_debug_overlay = false});
+  const Application native(reference, {.show_debug_overlay = false});
+  UiTest actual(css, TestOptions());
+  UiTest expected(native, TestOptions());
+  CheckSnapshot(actual, expected);
+
+  const auto target = actual.Find(UiSelector::Key("feedback"));
+  const auto bounds = target.One().bounds;
+  const auto check = [&](auto input) {
+    input(actual);
+    input(expected);
+    CheckSnapshot(actual, expected);
+    Check(target.One().bounds == bounds, "Interaction styles should preserve layout");
+  };
+  check([](UiTest& ui) { ui.PressKey(Key::Tab); });
+
+  PointerEvent mouse{.position = {bounds.x + bounds.width / 2.0F, bounds.y + bounds.height / 2.0F}};
+  const auto send = [&](UiTest& ui) {
+    ui.SendPointer(mouse);
+    ui.Pump();
+  };
+  check(send);
+  mouse.type = PointerEventType::Down;
+  mouse.changed_button = PointerButton::Primary;
+  mouse.pressed_buttons = PointerButton::Primary;
+  check(send);
+  mouse.type = PointerEventType::Up;
+  mouse.pressed_buttons = PointerButton::None;
+  check(send);
+  mouse = {.position = {200.0F, 200.0F}};
+  check(send);
+}
+
 void ExpectInvalid(std::string_view declarations, std::string_view diagnostic) {
   try {
     const Css rejected(declarations);
@@ -392,6 +476,8 @@ int main() {
     CheckEquivalent(CssGradients, NativeGradients);
     CheckAlignment();
     CheckCursor();
+    CheckFeedback([] { return CssFeedback(Button("Action"), true); }, [] { return NativeFeedback(Button("Action")); });
+    CheckFeedback([] { return CssFeedback(Text("Action"), false); }, [] { return NativeFeedback(Text("Action")); });
 
     ExpectInvalid("padding -2px", "expected ':'");
     ExpectInvalid("padding:", "expected a value");
@@ -418,6 +504,11 @@ int main() {
     ExpectInvalid("cursor: auto", "unsupported keyword");
     ExpectInvalid("opacity: 0.5", "unsupported CSS property");
     ExpectInvalid("padding: 2px; /*", "unterminated comment");
+    ExpectInvalid("&:visited { color: white }", "unsupported keyword");
+    ExpectInvalid("&:hover color: white", "expected '{'");
+    ExpectInvalid("&:hover { color: white", "unterminated interaction state block");
+    ExpectInvalid("&:active { padding: 1px }", "unsupported property in an interaction state block");
+    ExpectInvalid("&:focus-visible { color: }", "expected a value");
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

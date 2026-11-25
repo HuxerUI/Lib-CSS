@@ -4,7 +4,7 @@ Apply inline CSS declarations to [HuxerUI](https://github.com/HuxerUI/HuxerUI) v
 
 ## Integration
 
-Lib-CSS uses C++20 and CMake 3.20 or later. It is verified with HuxerUI 0.5.5 on macOS. The library uses HuxerUI's internal property modifier interface, so run the tests when upgrading the SDK.
+Lib-CSS uses C++20 and CMake 3.20 or later. Build it against a HuxerUI SDK or source checkout that provides `ModifierContext::Apply()`.
 
 Register Lib-CSS after declaring the application target. Choose one of the two forms below and replace the placeholder with a revision that contains the library.
 
@@ -60,6 +60,26 @@ return Text("Save").With(label_style, Padding(12.0F));
 
 A `Css` value parses and owns its declarations on construction. Reuse the value when applying the same style to several views or across recompositions.
 
+## Interaction styles
+
+```cpp
+return Button("Save")
+    .OnClick(save)
+    .With(Css(R"(
+      padding: 8px 16px;
+      background-color: #3730a3;
+      color: white;
+      border-radius: 8px;
+      &:hover { background-color: #4f46e5 }
+      &:active { background-color: #27215e }
+      &:focus-visible { border: 2px solid #a5b4fc }
+    )"));
+```
+
+State blocks accept `background`, `background-color`, `color`, `border`, and `border-radius`. State `color` follows the SDK's indication foreground rules for `Text`, `Button` labels, and vector images. Repeated blocks for the same state merge by property in declaration order. HuxerUI selects one layer at a time in active, hover, then visible-focus order. A selected layer draws its fill over the base fill behind the content and uses the base appearance for unspecified properties. State changes apply immediately and preserve layout.
+
+A declaration in any state block replaces the View's default `Indication`, including its ripple. The theme's keyboard focus ring is drawn separately. `.OnClick()` can appear before or after `.With()`. Use a clickable or focusable View to receive the corresponding interaction states.
+
 ## Supported declarations
 
 | Property | Supported values |
@@ -93,7 +113,7 @@ Separate declarations with semicolons. CSS comments and an optional final semico
 
 ## Preview and tests
 
-The [preview app](examples/preview) demonstrates gradients, shadows, container alignment, pointer cursors, and native modifier overrides. Run it on macOS from the repository root.
+The [preview app](examples/preview) demonstrates gradients, shadows, container alignment, pointer cursors, interaction styles, and native modifier overrides. Run it on macOS from the repository root.
 
 ```sh
 cd examples/preview
@@ -108,7 +128,7 @@ cmake --build build/tests
 ctest --test-dir build/tests --output-on-failure
 ```
 
-The [test suite](tests/css.cpp) compares layout and paint output against equivalent HuxerUI modifiers and checks override order, cursor requests, shorthand values, and invalid inputs.
+The [test suite](tests/css.cpp) compares layout and paint output against equivalent HuxerUI modifiers and checks override order, cursor requests, interaction states, shorthand values, and invalid inputs.
 
 ## License
 

@@ -13,12 +13,24 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
+
+#include <huxerui/indication.h>
 
 namespace huxerui::css {
 
+namespace {
+
+using Property = std::variant<
+    Padding, Border, CornerRadius, Shadow, Background, Foreground, FontSize, Spacing, MainAlign, CrossAlign,
+    PointerCursor, Frame>;
+
+} // namespace
+
 struct Css::Impl {
-  std::vector<detail::ModifierSpec> properties;
+  std::vector<Property> properties;
+  Indication indication;
 };
 
 namespace {
@@ -113,8 +125,8 @@ public:
           break;
         }
       } else if (depth == 0 &&
-                 (IsWhitespace(character) || character == ':' || character == ';' ||
-                  character == ',' || character == '/')) {
+                 (IsWhitespace(character) || character == ':' || character == ';' || character == ',' ||
+                  character == '/' || character == '{' || character == '}' || character == '&')) {
         break;
       }
       ++position_;
@@ -156,18 +168,16 @@ private:
   std::size_t position_ = 0;
 };
 
-bool ReadDeclaration(ValueReader& reader, Declaration& declaration) {
-  while (reader.Consume(';')) {}
-  if (reader.Empty()) return false;
-  declaration = {.name = reader.Read()};
+Declaration ReadDeclaration(ValueReader& reader) {
+  Declaration declaration{.name = reader.Read()};
   if (!reader.Consume(':')) Invalid(declaration.name, "expected ':' after the property name");
-  while (!reader.Empty() && !reader.Consume(';')) {
+  while (!reader.Empty() && !reader.At('}') && !reader.Consume(';')) {
     if (reader.At(',')) Invalid(declaration.name, "expected a single value or layer");
     if (declaration.value_count == declaration.values.size()) Invalid(declaration.name, "too many values");
     declaration.values[declaration.value_count++] = reader.Read(declaration.name.text);
   }
   if (declaration.value_count == 0) Invalid(declaration.name, "expected a value");
-  return true;
+  return declaration;
 }
 
 struct FunctionValue {
@@ -318,6 +328,11 @@ std::array<float, 4> ParseFourLengths(const Declaration& declaration) {
   return {first, second, third, fourth};
 }
 
+CornerRadii ParseCornerRadii(const Declaration& declaration) {
+  const auto [top_left, top_right, bottom_right, bottom_left] = ParseFourLengths(declaration);
+  return {top_left, top_right, bottom_right, bottom_left};
+}
+
 Border ParseBorder(const Declaration& declaration) {
   const auto values = declaration.Arguments();
   if (values.size() == 1 && MatchesKeyword(values.front().text, "none")) {
@@ -454,40 +469,76 @@ void ValidateBounds(std::optional<float> minimum, std::optional<float> maximum, 
   }
 }
 
-detail::ModifierSpec ParseProperty(const Declaration& declaration) {
+Property ParseProperty(const Declaration& declaration) {
   const auto name = declaration.name.text;
   if (MatchesKeyword(name, "padding")) {
     const auto [top, right, bottom, left] = ParseFourLengths(declaration);
-    return detail::MakeModifierSpec(Padding(EdgeInsets{top, right, bottom, left}));
+    return Padding(EdgeInsets{top, right, bottom, left});
   }
-  if (MatchesKeyword(name, "border")) return detail::MakeModifierSpec(ParseBorder(declaration));
-  if (MatchesKeyword(name, "border-radius")) {
-    const auto [top_left, top_right, bottom_right, bottom_left] = ParseFourLengths(declaration);
-    return detail::MakeModifierSpec(CornerRadius(top_left, top_right, bottom_right, bottom_left));
-  }
-  if (MatchesKeyword(name, "box-shadow")) return detail::MakeModifierSpec(ParseShadow(declaration));
-  if (MatchesKeyword(name, "background")) return detail::MakeModifierSpec(ParseBackground(declaration.SingleValue()));
+  if (MatchesKeyword(name, "border")) return ParseBorder(declaration);
+  if (MatchesKeyword(name, "border-radius")) return CornerRadius(ParseCornerRadii(declaration));
+  if (MatchesKeyword(name, "box-shadow")) return ParseShadow(declaration);
+  if (MatchesKeyword(name, "background")) return ParseBackground(declaration.SingleValue());
   if (MatchesKeyword(name, "background-color")) {
-    return detail::MakeModifierSpec(Background(ParseColor(declaration.SingleValue())));
+    return Background(ParseColor(declaration.SingleValue()));
   }
-  if (MatchesKeyword(name, "color")) return detail::MakeModifierSpec(Foreground(ParseColor(declaration.SingleValue())));
+  if (MatchesKeyword(name, "color")) return Foreground(ParseColor(declaration.SingleValue()));
   if (MatchesKeyword(name, "font-size")) {
     const Token value = declaration.SingleValue();
     const float size = ParseLength(value);
     if (size == 0.0F) Invalid(value, "font size must be positive");
-    return detail::MakeModifierSpec(FontSize(size));
+    return FontSize(size);
   }
-  if (MatchesKeyword(name, "gap")) return detail::MakeModifierSpec(Spacing(ParseLength(declaration.SingleValue())));
+  if (MatchesKeyword(name, "gap")) return Spacing(ParseLength(declaration.SingleValue()));
   if (MatchesKeyword(name, "justify-content")) {
-    return detail::MakeModifierSpec(MainAlign(ParseKeyword(declaration.SingleValue(), main_alignments)));
+    return MainAlign(ParseKeyword(declaration.SingleValue(), main_alignments));
   }
   if (MatchesKeyword(name, "align-items")) {
-    return detail::MakeModifierSpec(CrossAlign(ParseKeyword(declaration.SingleValue(), cross_alignments)));
+    return CrossAlign(ParseKeyword(declaration.SingleValue(), cross_alignments));
   }
   if (MatchesKeyword(name, "cursor")) {
-    return detail::MakeModifierSpec(PointerCursor(ParseKeyword(declaration.SingleValue(), cursors)));
+    return PointerCursor(ParseKeyword(declaration.SingleValue(), cursors));
   }
   Invalid(declaration.name, "unsupported CSS property");
+}
+
+void ApplyStateProperty(IndicationLayer& layer, const Declaration& declaration) {
+  const auto name = declaration.name.text;
+  if (MatchesKeyword(name, "background")) {
+    layer.fill = ParseBackground(declaration.SingleValue()).fill;
+  } else if (MatchesKeyword(name, "background-color")) {
+    layer.fill = ParseColor(declaration.SingleValue());
+  } else if (MatchesKeyword(name, "color")) {
+    layer.foreground = ParseColor(declaration.SingleValue());
+  } else if (MatchesKeyword(name, "border")) {
+    layer.border = ParseBorder(declaration);
+  } else if (MatchesKeyword(name, "border-radius")) {
+    layer.corner_radii = ParseCornerRadii(declaration);
+  } else {
+    Invalid(declaration.name, "unsupported property in an interaction state block");
+  }
+}
+
+void ParseStateBlock(ValueReader& reader, Indication& indication) {
+  using StateField = std::optional<IndicationLayer> Indication::*;
+  constexpr std::pair<std::string_view, StateField> states[] = {
+      {"hover", &Indication::hover}, {"active", &Indication::press}, {"focus-visible", &Indication::focus},
+  };
+
+  if (!reader.Consume(':')) Invalid(reader.Read(), "expected ':' after '&'");
+  const Token state = reader.Read();
+  auto& layer = indication.*ParseKeyword(state, states);
+  if (!reader.Consume('{')) Invalid(state, "expected '{' after the interaction state");
+  while (!reader.Consume('}')) {
+    if (reader.Empty()) Invalid(state, "unterminated interaction state block");
+    if (reader.Consume(';')) continue;
+    if (!layer) {
+      layer.emplace(
+          IndicationLayer{.placement = IndicationPlacement::BehindContent, .enter = SnapSpec{}, .exit = SnapSpec{}}
+      );
+    }
+    ApplyStateProperty(*layer, ReadDeclaration(reader));
+  }
 }
 
 } // namespace
@@ -498,8 +549,13 @@ Css::Css(std::string_view declarations) {
   Token min_width;
   Token min_height;
   ValueReader reader(Token{declarations});
-  Declaration declaration{};
-  while (ReadDeclaration(reader, declaration)) {
+  while (!reader.Empty()) {
+    if (reader.Consume(';')) continue;
+    if (reader.Consume('&')) {
+      ParseStateBlock(reader, impl->indication);
+      continue;
+    }
+    const Declaration declaration = ReadDeclaration(reader);
     const auto dimension = std::ranges::find_if(dimensions, [&](const auto& entry) {
       return MatchesKeyword(declaration.name.text, entry.first);
     });
@@ -516,29 +572,20 @@ Css::Css(std::string_view declarations) {
     // Merge size declarations before applying the frame so only the final bounds are validated.
     ValidateBounds(frame.min_width, frame.max_width, min_width);
     ValidateBounds(frame.min_height, frame.max_height, min_height);
-    impl->properties.push_back(detail::MakeModifierSpec(frame));
-  }
-  for (const auto& property : impl->properties) {
-    const auto& descriptor = *property.descriptor;
-    if (descriptor.compile == nullptr || descriptor.create_extension != nullptr) {
-      throw std::logic_error("Lib-CSS requires a compatible HuxerUI property modifier descriptor");
-    }
+    impl->properties.emplace_back(frame);
   }
   impl_ = std::move(impl);
 }
 
-const detail::ModifierDescriptor& Css::Descriptor() {
-  static const detail::ModifierDescriptor descriptor{
-      .compile = [](detail::ViewSpec& view, detail::ModifierSpec& modifier,
-                    const std::shared_ptr<const Environment>& environment, detail::AppResources& resources) {
-        const auto& css = *static_cast<const Css*>(modifier.value.get());
-        if (!css.impl_) return;
-        for (auto property : css.impl_->properties) {
-          property.descriptor->compile(view, property, environment, resources);
-        }
-      },
-  };
-  return descriptor;
+void Css::Configure(ModifierContext& context) const {
+  if (!impl_) return;
+  for (const auto& property : impl_->properties) {
+    std::visit([&context](const auto& value) { context.Apply(value); }, property);
+  }
+  const auto& indication = impl_->indication;
+  if (indication.hover || indication.press || indication.focus) {
+    context.Apply(indication);
+  }
 }
 
 } // namespace huxerui::css

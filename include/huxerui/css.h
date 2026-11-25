@@ -29,6 +29,11 @@ namespace huxerui::css {
 /// Colors accept hexadecimal forms, black, white, transparent, and numeric rgb(), rgba(), hsl(), and hsla()
 /// functions. Font size takes a positive length.
 ///
+/// Use `&:hover { ... }`, `&:active { ... }`, and `&:focus-visible { ... }` for interaction feedback.
+/// Each block accepts background, background-color, color, border, and border-radius. State backgrounds blend
+/// over the base fill behind the content. HuxerUI selects active, hover, then visible focus in that order.
+/// A state declaration replaces the View's default indication, including its ripple.
+///
 /// @code{.cpp}
 /// return Text("Save").With(
 ///     Css("padding: 8px 16px; background-color: #2563eb; color: white;"),
@@ -38,16 +43,15 @@ namespace huxerui::css {
 class Css {
 public:
   /// @brief Parses and owns the declarations. Copies share the parsed data and can be reused across compositions.
-  /// @param declarations Semicolon-separated property-value pairs. CSS comments and an optional final semicolon
-  /// are accepted. An empty list leaves the View unchanged.
+  /// @param declarations Semicolon-separated property-value pairs and optional interaction-state blocks.
+  /// CSS comments and an optional final semicolon are accepted. Empty declarations leave the View unchanged.
   /// @throws std::invalid_argument If the input is malformed, contains an unsupported property or value,
   /// or resolves to a minimum dimension greater than its maximum. The diagnostic includes a zero-based byte offset.
-  /// @throws std::logic_error If the linked HuxerUI SDK does not provide a compatible property-only descriptor.
   explicit Css(std::string_view declarations);
 
-  /// @brief Provides the descriptor used by View::With() to apply the parsed declarations.
-  /// @return A reference to the library-owned descriptor with static storage duration.
-  static const detail::ModifierDescriptor& Descriptor();
+  /// @brief Applies the parsed declarations at this modifier's position in View::With().
+  /// @param context The SDK's modifier context for the current View.
+  void Configure(ModifierContext& context) const;
 
 private:
   struct Impl;

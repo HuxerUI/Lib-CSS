@@ -31,6 +31,18 @@ const Css alignment_style(R"(
   border-radius: 8px;
 )");
 
+const Css feedback_style(R"(
+  padding: 8px 16px;
+  background-color: #3730a3;
+  color: white;
+  border: 2px solid #3730a3;
+  border-radius: 8px;
+  cursor: pointer;
+  &:hover { background-color: #4f46e5 }
+  &:active { background-color: #27215e; border: 2px solid #27215e }
+  &:focus-visible { border: 2px solid #a5b4fc }
+)");
+
 View Sample(std::string_view title, std::string_view declaration, View content) {
   return Column {
     Text(title).With(FontSize(16.0F), Foreground(Color::Rgb(25, 38, 66))),
@@ -56,6 +68,8 @@ View App() {
           Text("Preview").With(sample_style, Padding(18.0F))),
       Sample("Background override", ".With(sample_style, Background(...))",
           Text("Preview").With(sample_style, Background(Color::Rgb(4, 120, 87)))),
+      Sample("Interaction styles", "Hover, press, or focus with Tab",
+          Button("Try it").OnClick([] {}).With(feedback_style)),
       Sample(
           "Container alignment",
           "justify-content: space-between; align-items: center",

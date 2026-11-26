@@ -1,0 +1,27 @@
+[package]
+namespace   = "huxerui"
+name        = "css"
+version     = "0.1.0"
+standard    = "c++23"
+description = "Inline CSS declarations for HuxerUI views"
+license     = "MIT"
+repo        = "https://github.com/HuxerUI/Lib-CSS"
+
+[package.metadata.huxerui]
+library   = "HuxerUI::CSS"
+name      = "css"
+id        = "org.huxerui.css"
+namespace = "huxerui::css"
+
+[dependencies]
+huxerui.huxerui = "0.5.5"
+
+[targets.huxerui_css]
+kind = "lib"
+
+[lib]
+path = "modules/css.cppm"
+
+[build]
+sources      = []
+include_dirs = ["include"]
